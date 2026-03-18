@@ -18,7 +18,8 @@ LABEL name="rhaii-validator" \
       summary="RHAII Cluster Validation Agent" \
       description="Per-node hardware validation agent for GPU, RDMA, and network checks"
 
-# Install tools needed by the agent
+# Agent only needs util-linux (chroot) and pciutils (lspci)
+# GPU/RDMA tools run on the host via chroot /host
 RUN dnf install -y \
       util-linux \
       pciutils \
@@ -26,8 +27,8 @@ RUN dnf install -y \
 
 COPY --from=builder /opt/app-root/rhaii-validator /usr/local/bin/rhaii-validator
 
-# GPU/RDMA tools (nvidia-smi, ibstat, ibv_devices) run on the host via nsenter.
-# No need to install them in the container - privileged pod + nsenter handles it.
+# Agent checks: GPU/RDMA tools run on host via chroot /host
+# Job tests: iperf3, ib_write_bw run directly in the container
 
 USER 0
 

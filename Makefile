@@ -60,6 +60,14 @@ test:
 container:
 	$(CONTAINER_RUNTIME) build --build-arg VERSION=$(VERSION) -t $(IMG) .
 
+IMG_TOOLS ?= quay.io/opendatahub/rhaii-rdma-tools:latest
+
+container-rdma:
+	$(CONTAINER_RUNTIME) build -f Dockerfile.rdma-tools --build-arg VERSION=$(VERSION) -t $(IMG_TOOLS) .
+
+push-rdma:
+	$(CONTAINER_RUNTIME) push $(IMG_TOOLS)
+
 push:
 	$(CONTAINER_RUNTIME) push $(IMG)
 
