@@ -496,24 +496,13 @@ func (c *Controller) Run(ctx context.Context) error {
 	if needBandwidth && len(c.jobs) > 0 && len(gpuNodes) >= 2 {
 		// If net checks didn't run this session, load topology from stored report
 		if len(netReports) == 0 {
-			storedTopo, topoErr := c.loadTopologyFromReport(ctx)
+			stored, topoErr := c.loadTopologyFromReport(ctx, gpuNodes)
 			if topoErr != nil {
 				fmt.Fprintf(c.output, "  Warning: %v\n", topoErr)
 				fmt.Fprintln(c.output, "  Hint: run 'kubectl rhaii-validate net-checks' first to generate topology")
 			} else {
-				for node, topo := range storedTopo {
-					netReports = append(netReports, checks.NodeReport{
-						Node: node,
-						Results: []checks.Result{{
-							Node:     node,
-							Category: "networking_rdma",
-							Name:     "gpu_nic_topology",
-							Status:   checks.StatusPass,
-							Details:  topo,
-						}},
-					})
-				}
-				fmt.Fprintf(c.output, "  Loaded topology for %d node(s) from stored report\n", len(storedTopo))
+				netReports = stored
+				fmt.Fprintf(c.output, "  Loaded topology for %d node(s) from stored report\n", len(stored))
 			}
 		}
 
@@ -1299,9 +1288,10 @@ func buildTopologyMap(reports []checks.NodeReport) map[string]*checks.NodeTopolo
 	return m
 }
 
-// loadTopologyFromReport reads topology from the stored report ConfigMap.
-// Used by net-bandwidth mode to get topology without re-running net checks.
-func (c *Controller) loadTopologyFromReport(ctx context.Context) (map[string]*checks.NodeTopology, error) {
+// loadTopologyFromReport reads topology-bearing NodeReports from the stored
+// report ConfigMap. Only nodes present in gpuNodes are returned, preserving
+// original Result status/details so WARN/FAIL aren't overwritten with PASS.
+func (c *Controller) loadTopologyFromReport(ctx context.Context, gpuNodes []string) ([]checks.NodeReport, error) {
 	cm, err := c.client.CoreV1().ConfigMaps(c.opts.Namespace).Get(ctx, reportCMName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("no stored report found (ConfigMap %s/%s): %w", c.opts.Namespace, reportCMName, err)
@@ -1319,12 +1309,25 @@ func (c *Controller) loadTopologyFromReport(ctx context.Context) (map[string]*ch
 		return nil, fmt.Errorf("failed to parse stored report: %w", err)
 	}
 
-	topoMap := buildTopologyMap(stored.Nodes)
-	if len(topoMap) == 0 {
-		return nil, fmt.Errorf("stored report has no topology data")
+	nodeSet := make(map[string]bool, len(gpuNodes))
+	for _, n := range gpuNodes {
+		nodeSet[n] = true
 	}
 
-	return topoMap, nil
+	var reports []checks.NodeReport
+	for _, r := range stored.Nodes {
+		if !nodeSet[r.Node] {
+			continue
+		}
+		if checks.ExtractTopology(r) != nil {
+			reports = append(reports, r)
+		}
+	}
+	if len(reports) == 0 {
+		return nil, fmt.Errorf("stored report has no topology data for current GPU nodes")
+	}
+
+	return reports, nil
 }
 
 // expandRDMAJobs creates per-GPU-NIC RDMA jobs from topology.
