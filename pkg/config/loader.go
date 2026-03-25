@@ -33,18 +33,16 @@ func Load(platform Platform, configFile string) (PlatformConfig, error) {
 		}
 	}
 
-	if overrideFile == "" {
-		return cfg, nil
-	}
+	if overrideFile != "" {
+		data, err := os.ReadFile(overrideFile)
+		if err != nil {
+			return cfg, fmt.Errorf("failed to read config file %s: %w", overrideFile, err)
+		}
 
-	data, err := os.ReadFile(overrideFile)
-	if err != nil {
-		return cfg, fmt.Errorf("failed to read config file %s: %w", overrideFile, err)
-	}
-
-	// Unmarshal on top of defaults — only provided fields are overridden
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return cfg, fmt.Errorf("failed to parse config file %s: %w", overrideFile, err)
+		// Unmarshal on top of defaults — only provided fields are overridden
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return cfg, fmt.Errorf("failed to parse config file %s: %w", overrideFile, err)
+		}
 	}
 
 	if err := cfg.Validate(); err != nil {
