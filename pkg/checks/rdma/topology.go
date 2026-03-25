@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -125,6 +126,13 @@ func sysfsExec(ctx context.Context, name string, args ...string) ([]byte, error)
 	return exec.CommandContext(ctx, name, args...).Output()
 }
 
+// pciAddrRegex matches a well-formed PCI BDF address (DDDD:BB:DD.F, hex).
+var pciAddrRegex = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]$`)
+
+func validPCIAddr(addr string) bool {
+	return pciAddrRegex.MatchString(addr)
+}
+
 // ---------------------------------------------------------------------------
 // GPU discovery
 // ---------------------------------------------------------------------------
@@ -163,13 +171,17 @@ func discoverNVIDIAGPUs(ctx context.Context) ([]gpuInfo, error) {
 		sysfsAddr := normalizePCIAddr(pciAddr)
 
 		numa := -1
-		numaOutput, err := sysfsExec(ctx, "cat",
-			fmt.Sprintf("/sys/bus/pci/devices/%s/numa_node", sysfsAddr))
-		if err == nil {
-			numa, _ = strconv.Atoi(strings.TrimSpace(string(numaOutput)))
+		var pciePath []string
+		if validPCIAddr(sysfsAddr) {
+			numaOutput, err := sysfsExec(ctx, "cat",
+				fmt.Sprintf("/sys/bus/pci/devices/%s/numa_node", sysfsAddr))
+			if err == nil {
+				numa, _ = strconv.Atoi(strings.TrimSpace(string(numaOutput)))
+			}
+			pciePath = discoverPCIePath(ctx, sysfsAddr)
+		} else {
+			sysfsAddr = ""
 		}
-
-		pciePath := discoverPCIePath(ctx, sysfsAddr)
 
 		gpus = append(gpus, gpuInfo{id: id, name: name, numa: numa, pciAddr: sysfsAddr, pciePath: pciePath})
 	}
@@ -225,7 +237,9 @@ func discoverAMDGPUs(ctx context.Context) ([]gpuInfo, error) {
 	}
 
 	for i, g := range gpus {
-		if g.pciAddr == "" {
+		if g.pciAddr == "" || !validPCIAddr(g.pciAddr) {
+			gpus[i].pciAddr = ""
+			gpus[i].numa = -1
 			continue
 		}
 		numaOutput, err := sysfsExec(ctx, "cat",
@@ -287,6 +301,10 @@ func discoverNICs(ctx context.Context, rdmaMode string) ([]nicInfo, error) {
 			linkLayer = strings.TrimSpace(string(llOutput))
 		}
 
+		if pciAddr != "" && !validPCIAddr(pciAddr) {
+			pciAddr = ""
+			pciePath = nil
+		}
 		if rdmaMode == "ib" && linkLayer != "InfiniBand" {
 			continue
 		}
