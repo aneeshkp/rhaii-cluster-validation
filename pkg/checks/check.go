@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -34,50 +35,78 @@ const (
 	StatusSkip Status = "SKIP"
 )
 
+// LinkLayer represents the RDMA link layer type reported by sysfs.
+type LinkLayer string
+
+const (
+	LinkLayerInfiniBand LinkLayer = "InfiniBand"
+	LinkLayerEthernet   LinkLayer = "Ethernet"
+)
+
+// PairingStrategy identifies the algorithm used to pair GPUs with NICs.
+type PairingStrategy string
+
+const (
+	// PairingNUMAAffinity pairs by NUMA proximity (flat topology fallback).
+	PairingNUMAAffinity PairingStrategy = "numa_affinity"
+	// PairingPCIeDistance pairs 1:1 by shortest PCIe tree distance.
+	PairingPCIeDistance PairingStrategy = "pcie_distance"
+	// PairingNUMALoadBalance distributes GPUs across NICs within each NUMA.
+	PairingNUMALoadBalance PairingStrategy = "numa_load_balance"
+)
+
 // GPUInfo describes a single GPU with its PCIe location.
 type GPUInfo struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	NUMA    int    `json:"numa"`
-	PCIAddr string `json:"pci_addr"`
+	ID       int      `json:"id"`
+	Name     string   `json:"name"`
+	NUMA     int      `json:"numa"`
+	PCIAddr  string   `json:"pci_addr"`
+	PCIePath []string `json:"pcie_path,omitempty"`
 }
 
 // NICInfo describes a single RDMA NIC (HCA) with its PCIe location.
 type NICInfo struct {
-	Dev       string `json:"dev"`
-	NUMA      int    `json:"numa"`
-	PCIAddr   string `json:"pci_addr"`
-	LinkLayer string `json:"link_layer"` // "InfiniBand" or "Ethernet"
+	Dev       string    `json:"dev"`
+	NUMA      int       `json:"numa"`
+	PCIAddr   string    `json:"pci_addr"`
+	LinkLayer LinkLayer `json:"link_layer"`
+	PCIePath  []string  `json:"pcie_path,omitempty"`
 }
 
 // GPUNICPair represents a GPU paired with its closest RDMA NIC.
 type GPUNICPair struct {
-	GPUID      int    `json:"gpu_id"`
-	GPUName    string `json:"gpu_name,omitempty"`
-	GPUPCIAddr string `json:"gpu_pci_addr,omitempty"`
-	NUMAID     int    `json:"numa_id"`
-	NICDev     string `json:"nic_dev"`
-	NICNuma    int    `json:"nic_numa"`
-	NICPCIAddr string `json:"nic_pci_addr,omitempty"`
-	PCIeHops   int    `json:"pcie_hops"`
+	GPU      GPUInfo `json:"gpu"`
+	NIC      NICInfo `json:"nic"`
+	PCIeHops int     `json:"pcie_hops"`
 }
 
 // NodeTopology holds the GPU-NIC-NUMA mapping for a node.
 type NodeTopology struct {
-	GPUCount        int          `json:"gpu_count"`
-	NICCount        int          `json:"nic_count"`
-	IsFlat          bool         `json:"is_flat"`
-	PairingStrategy string       `json:"pairing_strategy"`
-	GPUList         []GPUInfo    `json:"gpu_list,omitempty"`
-	NICList         []NICInfo    `json:"nic_list,omitempty"`
-	Pairs           []GPUNICPair `json:"pairs"`
+	GPUCount        int             `json:"gpu_count"`
+	NICCount        int             `json:"nic_count"`
+	IsFlat          bool            `json:"is_flat"`
+	PairingStrategy PairingStrategy `json:"pairing_strategy"`
+	GPUList         []GPUInfo       `json:"gpu_list,omitempty"`
+	NICList         []NICInfo       `json:"nic_list,omitempty"`
+	Pairs           []GPUNICPair    `json:"pairs"`
 }
 
 // NodeReport is the complete output from an agent run on a single node.
 type NodeReport struct {
 	Node      string    `json:"node"`
 	Timestamp time.Time `json:"timestamp"`
-	Results   []Result  `json:"results"`
+	Results   []Result  `json:"results,omitempty"`
+}
+
+// NormalizeRDMAMode validates and normalizes an RDMA mode string.
+// Returns the lowercased mode if valid ("ib" or "roce"), empty string
+// for empty input, or empty string for unknown values.
+func NormalizeRDMAMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "ib" || mode == "roce" {
+		return mode
+	}
+	return ""
 }
 
 // ExtractTopology finds the gpu_nic_topology check result and deserializes

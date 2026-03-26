@@ -62,22 +62,13 @@ func (c *TopologyCheck) Run(ctx context.Context) checks.Result {
 
 	pairs, flat, strategy := buildPairs(gpus, nics)
 
-	gpuList := make([]checks.GPUInfo, len(gpus))
-	for i, g := range gpus {
-		gpuList[i] = checks.GPUInfo{ID: g.id, Name: g.name, NUMA: g.numa, PCIAddr: g.pciAddr}
-	}
-	nicList := make([]checks.NICInfo, len(nics))
-	for i, n := range nics {
-		nicList[i] = checks.NICInfo{Dev: n.dev, NUMA: n.numa, PCIAddr: n.pciAddr, LinkLayer: n.linkLayer}
-	}
-
 	topo := &checks.NodeTopology{
 		GPUCount:        len(gpus),
 		NICCount:        len(nics),
 		IsFlat:          flat,
 		PairingStrategy: strategy,
-		GPUList:         gpuList,
-		NICList:         nicList,
+		GPUList:         gpus,
+		NICList:         nics,
 		Pairs:           pairs,
 	}
 
@@ -96,28 +87,12 @@ func (c *TopologyCheck) Run(ctx context.Context) checks.Result {
 
 	var pairDescs []string
 	for _, p := range pairs {
-		pairDescs = append(pairDescs, fmt.Sprintf("GPU%d↔%s(NUMA%d)", p.GPUID, p.NICDev, p.NUMAID))
+		pairDescs = append(pairDescs, fmt.Sprintf("GPU%d↔%s(NUMA:%d↔%d)", p.GPU.ID, p.NIC.Dev, p.GPU.NUMA, p.NIC.NUMA))
 	}
 	r.Message = fmt.Sprintf("%d GPU(s), %d NIC(s), strategy=%s: %s",
 		len(gpus), len(nics), strategy, strings.Join(pairDescs, ", "))
 
 	return r
-}
-
-type gpuInfo struct {
-	id       int
-	name     string
-	numa     int
-	pciAddr  string
-	pciePath []string // full PCIe hierarchy from sysfs
-}
-
-type nicInfo struct {
-	dev       string
-	numa      int
-	pciAddr   string
-	linkLayer string   // "InfiniBand" or "Ethernet"
-	pciePath  []string // full PCIe hierarchy from sysfs
 }
 
 // sysfsExec runs a command directly (no chroot). Privileged containers
@@ -137,7 +112,7 @@ func validPCIAddr(addr string) bool {
 // GPU discovery
 // ---------------------------------------------------------------------------
 
-func discoverGPUs(ctx context.Context, vendor string) ([]gpuInfo, error) {
+func discoverGPUs(ctx context.Context, vendor string) ([]checks.GPUInfo, error) {
 	switch vendor {
 	case "amd":
 		return discoverAMDGPUs(ctx)
@@ -146,7 +121,7 @@ func discoverGPUs(ctx context.Context, vendor string) ([]gpuInfo, error) {
 	}
 }
 
-func discoverNVIDIAGPUs(ctx context.Context) ([]gpuInfo, error) {
+func discoverNVIDIAGPUs(ctx context.Context) ([]checks.GPUInfo, error) {
 	output, err := exec.CommandContext(ctx, "nvidia-smi",
 		"--query-gpu=index,gpu_name,pci.bus_id",
 		"--format=csv,noheader,nounits").Output()
@@ -154,7 +129,7 @@ func discoverNVIDIAGPUs(ctx context.Context) ([]gpuInfo, error) {
 		return nil, fmt.Errorf("nvidia-smi failed: %w", err)
 	}
 
-	var gpus []gpuInfo
+	var gpus []checks.GPUInfo
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		fields := strings.SplitN(line, ",", 3)
 		if len(fields) < 3 {
@@ -183,7 +158,7 @@ func discoverNVIDIAGPUs(ctx context.Context) ([]gpuInfo, error) {
 			sysfsAddr = ""
 		}
 
-		gpus = append(gpus, gpuInfo{id: id, name: name, numa: numa, pciAddr: sysfsAddr, pciePath: pciePath})
+		gpus = append(gpus, checks.GPUInfo{ID: id, Name: name, NUMA: numa, PCIAddr: sysfsAddr, PCIePath: pciePath})
 	}
 
 	return gpus, nil
@@ -206,14 +181,14 @@ func normalizePCIAddr(addr string) string {
 //	GPU: 0
 //	    BDF: 0000:0c:00.0
 //	    UUID: ...
-func discoverAMDGPUs(ctx context.Context) ([]gpuInfo, error) {
+func discoverAMDGPUs(ctx context.Context) ([]checks.GPUInfo, error) {
 	output, err := exec.CommandContext(ctx, "amd-smi", "list").Output()
 	if err != nil {
 		return nil, fmt.Errorf("amd-smi list failed: %w", err)
 	}
 
-	var gpus []gpuInfo
-	var current *gpuInfo
+	var gpus []checks.GPUInfo
+	var current *checks.GPUInfo
 
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
@@ -227,9 +202,9 @@ func discoverAMDGPUs(ctx context.Context) ([]gpuInfo, error) {
 				current = nil
 				continue
 			}
-			current = &gpuInfo{id: id, name: "AMD GPU"}
+			current = &checks.GPUInfo{ID: id, Name: "AMD GPU"}
 		} else if strings.HasPrefix(line, "BDF:") && current != nil {
-			current.pciAddr = strings.TrimSpace(strings.TrimPrefix(line, "BDF:"))
+			current.PCIAddr = strings.TrimSpace(strings.TrimPrefix(line, "BDF:"))
 		}
 	}
 	if current != nil {
@@ -237,19 +212,19 @@ func discoverAMDGPUs(ctx context.Context) ([]gpuInfo, error) {
 	}
 
 	for i, g := range gpus {
-		if g.pciAddr == "" || !validPCIAddr(g.pciAddr) {
-			gpus[i].pciAddr = ""
-			gpus[i].numa = -1
+		if g.PCIAddr == "" || !validPCIAddr(g.PCIAddr) {
+			gpus[i].PCIAddr = ""
+			gpus[i].NUMA = -1
 			continue
 		}
 		numaOutput, err := sysfsExec(ctx, "cat",
-			fmt.Sprintf("/sys/bus/pci/devices/%s/numa_node", g.pciAddr))
+			fmt.Sprintf("/sys/bus/pci/devices/%s/numa_node", g.PCIAddr))
 		if err == nil {
-			gpus[i].numa, _ = strconv.Atoi(strings.TrimSpace(string(numaOutput)))
+			gpus[i].NUMA, _ = strconv.Atoi(strings.TrimSpace(string(numaOutput)))
 		} else {
-			gpus[i].numa = -1
+			gpus[i].NUMA = -1
 		}
-		gpus[i].pciePath = discoverPCIePath(ctx, g.pciAddr)
+		gpus[i].PCIePath = discoverPCIePath(ctx, g.PCIAddr)
 	}
 
 	return gpus, nil
@@ -262,13 +237,14 @@ func discoverAMDGPUs(ctx context.Context) ([]gpuInfo, error) {
 // discoverNICs finds RDMA devices with PCIe addresses and link layer type.
 // rdmaMode filters by link type: "ib" keeps InfiniBand, "roce" keeps Ethernet,
 // empty keeps all.
-func discoverNICs(ctx context.Context, rdmaMode string) ([]nicInfo, error) {
+func discoverNICs(ctx context.Context, rdmaMode string) ([]checks.NICInfo, error) {
+	rdmaMode = checks.NormalizeRDMAMode(rdmaMode)
 	output, err := sysfsExec(ctx, "ls", "/sys/class/infiniband/")
 	if err != nil {
 		return nil, fmt.Errorf("no infiniband devices: %w", err)
 	}
 
-	var nics []nicInfo
+	var nics []checks.NICInfo
 	for _, dev := range strings.Fields(strings.TrimSpace(string(output))) {
 		dev = strings.TrimSpace(dev)
 		if dev == "" {
@@ -294,28 +270,28 @@ func discoverNICs(ctx context.Context, rdmaMode string) ([]nicInfo, error) {
 			pciePath = parsePCIePath(fullPath)
 		}
 
-		linkLayer := ""
+		var linkLayer checks.LinkLayer
 		llOutput, err := sysfsExec(ctx, "cat",
 			filepath.Join("/sys/class/infiniband", dev, "ports/1/link_layer"))
 		if err == nil {
-			linkLayer = strings.TrimSpace(string(llOutput))
+			linkLayer = checks.LinkLayer(strings.TrimSpace(string(llOutput)))
 		}
 
 		if pciAddr != "" && !validPCIAddr(pciAddr) {
 			pciAddr = ""
 			pciePath = nil
 		}
-		if rdmaMode == "ib" && linkLayer != "InfiniBand" {
+		if rdmaMode == "ib" && linkLayer != checks.LinkLayerInfiniBand {
 			continue
 		}
-		if rdmaMode == "roce" && linkLayer != "Ethernet" {
+		if rdmaMode == "roce" && linkLayer != checks.LinkLayerEthernet {
 			continue
 		}
 
-		nics = append(nics, nicInfo{dev: dev, numa: numa, pciAddr: pciAddr, linkLayer: linkLayer, pciePath: pciePath})
+		nics = append(nics, checks.NICInfo{Dev: dev, NUMA: numa, PCIAddr: pciAddr, LinkLayer: linkLayer, PCIePath: pciePath})
 	}
 
-	sort.Slice(nics, func(i, j int) bool { return nics[i].dev < nics[j].dev })
+	sort.Slice(nics, func(i, j int) bool { return nics[i].Dev < nics[j].Dev })
 
 	return nics, nil
 }
@@ -378,14 +354,14 @@ func pcieDistance(a, b []string) int {
 
 // isFlat returns true when all device PCIe paths have at most 1 segment,
 // indicating a flat/virtual PCI bus with no hierarchy.
-func isFlat(gpus []gpuInfo, nics []nicInfo) bool {
+func isFlat(gpus []checks.GPUInfo, nics []checks.NICInfo) bool {
 	for _, g := range gpus {
-		if len(g.pciePath) > 1 {
+		if len(g.PCIePath) > 1 {
 			return false
 		}
 	}
 	for _, n := range nics {
-		if len(n.pciePath) > 1 {
+		if len(n.PCIePath) > 1 {
 			return false
 		}
 	}
@@ -396,14 +372,14 @@ func isFlat(gpus []gpuInfo, nics []nicInfo) bool {
 // PCIe path information suitable for distance calculations. Devices without
 // paths get unknownPathPenalty in buildCandidates, preventing them from
 // appearing artificially close.
-func hasPCIePaths(gpus []gpuInfo, nics []nicInfo) bool {
+func hasPCIePaths(gpus []checks.GPUInfo, nics []checks.NICInfo) bool {
 	for _, g := range gpus {
-		if len(g.pciePath) >= 2 {
+		if len(g.PCIePath) >= 2 {
 			return true
 		}
 	}
 	for _, n := range nics {
-		if len(n.pciePath) >= 2 {
+		if len(n.PCIePath) >= 2 {
 			return true
 		}
 	}
@@ -417,32 +393,31 @@ func hasPCIePaths(gpus []gpuInfo, nics []nicInfo) bool {
 // buildPairs dispatches to the appropriate pairing strategy based on
 // topology shape and GPU:NIC ratio. Returns pairs, isFlat flag, and
 // the strategy name.
-func buildPairs(gpus []gpuInfo, nics []nicInfo) ([]checks.GPUNICPair, bool, string) {
+func buildPairs(gpus []checks.GPUInfo, nics []checks.NICInfo) ([]checks.GPUNICPair, bool, checks.PairingStrategy) {
 	if len(nics) == 0 || len(gpus) == 0 {
-		return nil, true, "numa_affinity"
+		return nil, true, checks.PairingNUMAAffinity
 	}
 
 	flat := isFlat(gpus, nics)
 	if flat || !hasPCIePaths(gpus, nics) {
-		return numaAffinityPairing(gpus, nics), flat, "numa_affinity"
+		return numaAffinityPairing(gpus, nics), flat, checks.PairingNUMAAffinity
 	}
 
 	if len(gpus) == len(nics) {
-		return pcieDistancePairing(gpus, nics), false, "pcie_distance"
+		return pcieDistancePairing(gpus, nics), false, checks.PairingPCIeDistance
 	}
 
-	return numaLoadBalancePairing(gpus, nics), false, "numa_load_balance"
+	return numaLoadBalancePairing(gpus, nics), false, checks.PairingNUMALoadBalance
 }
 
 // numaAffinityPairing pairs GPUs to NICs by NUMA affinity with ordered matching.
 // Within each NUMA group, GPUs are sorted by ID and NICs by device name, then
 // zipped 1:1 (with round-robin when GPUs > NICs within a NUMA). Used as the
 // fallback strategy for flat topologies or when PCIe paths are unavailable.
-func numaAffinityPairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
+func numaAffinityPairing(gpus []checks.GPUInfo, nics []checks.NICInfo) []checks.GPUNICPair {
 	gpusByNuma := groupGPUsByNuma(gpus)
 	nicsByNuma := groupNICsByNuma(nics)
 
-	// Sort within groups
 	for numa := range gpusByNuma {
 		sortGPUsByID(gpusByNuma[numa])
 	}
@@ -462,7 +437,7 @@ func numaAffinityPairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
 		for i, g := range numaGPUs {
 			nic := numaNICs[i%len(numaNICs)]
 			pairs = append(pairs, makePair(g, nic, 0))
-			assignedGPU[g.id] = true
+			assignedGPU[g.ID] = true
 		}
 	}
 
@@ -471,7 +446,7 @@ func numaAffinityPairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
 		allNICs := sortedNICsCopy(nics)
 		fallbackIdx := 0
 		for _, g := range gpus {
-			if assignedGPU[g.id] {
+			if assignedGPU[g.ID] {
 				continue
 			}
 			nic := allNICs[fallbackIdx%len(allNICs)]
@@ -480,14 +455,14 @@ func numaAffinityPairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
 		}
 	}
 
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].GPUID < pairs[j].GPUID })
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].GPU.ID < pairs[j].GPU.ID })
 	return pairs
 }
 
 // pcieDistancePairing matches GPUs to NICs 1:1 using PCIe tree distance.
 // Phase 1: within each NUMA group, greedily assign by shortest PCIe distance.
 // Phase 2: match remaining GPUs and NICs cross-NUMA by PCIe distance.
-func pcieDistancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
+func pcieDistancePairing(gpus []checks.GPUInfo, nics []checks.NICInfo) []checks.GPUNICPair {
 	gpusByNuma := groupGPUsByNuma(gpus)
 	nicsByNuma := groupNICsByNuma(nics)
 
@@ -504,25 +479,25 @@ func pcieDistancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
 
 		candidates := buildCandidates(numaGPUs, numaNICs)
 		for _, c := range candidates {
-			if assignedGPU[c.gpu.id] || assignedNIC[c.nic.dev] {
+			if assignedGPU[c.gpu.ID] || assignedNIC[c.nic.Dev] {
 				continue
 			}
 			pairs = append(pairs, makePair(c.gpu, c.nic, c.dist))
-			assignedGPU[c.gpu.id] = true
-			assignedNIC[c.nic.dev] = true
+			assignedGPU[c.gpu.ID] = true
+			assignedNIC[c.nic.Dev] = true
 		}
 	}
 
 	// Phase 2: cross-NUMA for remaining
-	var remainGPUs []gpuInfo
-	var remainNICs []nicInfo
+	var remainGPUs []checks.GPUInfo
+	var remainNICs []checks.NICInfo
 	for _, g := range gpus {
-		if !assignedGPU[g.id] {
+		if !assignedGPU[g.ID] {
 			remainGPUs = append(remainGPUs, g)
 		}
 	}
 	for _, n := range nics {
-		if !assignedNIC[n.dev] {
+		if !assignedNIC[n.Dev] {
 			remainNICs = append(remainNICs, n)
 		}
 	}
@@ -530,23 +505,23 @@ func pcieDistancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
 	if len(remainGPUs) > 0 && len(remainNICs) > 0 {
 		candidates := buildCandidates(remainGPUs, remainNICs)
 		for _, c := range candidates {
-			if assignedGPU[c.gpu.id] || assignedNIC[c.nic.dev] {
+			if assignedGPU[c.gpu.ID] || assignedNIC[c.nic.Dev] {
 				continue
 			}
 			pairs = append(pairs, makePair(c.gpu, c.nic, c.dist+crossNUMAPenalty))
-			assignedGPU[c.gpu.id] = true
-			assignedNIC[c.nic.dev] = true
+			assignedGPU[c.gpu.ID] = true
+			assignedNIC[c.nic.Dev] = true
 		}
 	}
 
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].GPUID < pairs[j].GPUID })
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].GPU.ID < pairs[j].GPU.ID })
 	return pairs
 }
 
 // numaLoadBalancePairing distributes GPUs across NICs within NUMA groups
 // when GPU and NIC counts differ. Uses PCIe distance for preference when
 // paths are available, with even per-NIC capacity within each NUMA group.
-func numaLoadBalancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair {
+func numaLoadBalancePairing(gpus []checks.GPUInfo, nics []checks.NICInfo) []checks.GPUNICPair {
 	gpusByNuma := groupGPUsByNuma(gpus)
 	nicsByNuma := groupNICsByNuma(nics)
 
@@ -568,12 +543,12 @@ func numaLoadBalancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair 
 
 		candidates := buildCandidates(numaGPUs, numaNICs)
 		for _, c := range candidates {
-			if assignedGPU[c.gpu.id] || nicLoad[c.nic.dev] >= capacity {
+			if assignedGPU[c.gpu.ID] || nicLoad[c.nic.Dev] >= capacity {
 				continue
 			}
 			pairs = append(pairs, makePair(c.gpu, c.nic, c.dist))
-			assignedGPU[c.gpu.id] = true
-			nicLoad[c.nic.dev]++
+			assignedGPU[c.gpu.ID] = true
+			nicLoad[c.nic.Dev]++
 		}
 	}
 
@@ -582,13 +557,13 @@ func numaLoadBalancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair 
 		allNICs := sortedNICsCopy(nics)
 		fallbackIdx := 0
 		for _, g := range gpus {
-			if assignedGPU[g.id] {
+			if assignedGPU[g.ID] {
 				continue
 			}
 			nic := allNICs[fallbackIdx%len(allNICs)]
 			var dist int
-			if len(g.pciePath) >= 2 && len(nic.pciePath) >= 2 {
-				dist = pcieDistance(g.pciePath, nic.pciePath)
+			if len(g.PCIePath) >= 2 && len(nic.PCIePath) >= 2 {
+				dist = pcieDistance(g.PCIePath, nic.PCIePath)
 			} else {
 				dist = unknownPathPenalty
 			}
@@ -597,7 +572,7 @@ func numaLoadBalancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair 
 		}
 	}
 
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].GPUID < pairs[j].GPUID })
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].GPU.ID < pairs[j].GPU.ID })
 	return pairs
 }
 
@@ -606,21 +581,21 @@ func numaLoadBalancePairing(gpus []gpuInfo, nics []nicInfo) []checks.GPUNICPair 
 // ---------------------------------------------------------------------------
 
 type pairCandidate struct {
-	gpu  gpuInfo
-	nic  nicInfo
+	gpu  checks.GPUInfo
+	nic  checks.NICInfo
 	dist int
 }
 
 // buildCandidates computes all GPU-NIC pair candidates sorted by PCIe
 // distance (ascending), with deterministic tie-breaking by GPU ID then
 // NIC device name.
-func buildCandidates(gpus []gpuInfo, nics []nicInfo) []pairCandidate {
+func buildCandidates(gpus []checks.GPUInfo, nics []checks.NICInfo) []pairCandidate {
 	var candidates []pairCandidate
 	for _, g := range gpus {
 		for _, n := range nics {
 			var dist int
-			if len(g.pciePath) >= 2 && len(n.pciePath) >= 2 {
-				dist = pcieDistance(g.pciePath, n.pciePath)
+			if len(g.PCIePath) >= 2 && len(n.PCIePath) >= 2 {
+				dist = pcieDistance(g.PCIePath, n.PCIePath)
 			} else {
 				dist = unknownPathPenalty
 			}
@@ -631,53 +606,44 @@ func buildCandidates(gpus []gpuInfo, nics []nicInfo) []pairCandidate {
 		if candidates[i].dist != candidates[j].dist {
 			return candidates[i].dist < candidates[j].dist
 		}
-		if candidates[i].gpu.id != candidates[j].gpu.id {
-			return candidates[i].gpu.id < candidates[j].gpu.id
+		if candidates[i].gpu.ID != candidates[j].gpu.ID {
+			return candidates[i].gpu.ID < candidates[j].gpu.ID
 		}
-		return candidates[i].nic.dev < candidates[j].nic.dev
+		return candidates[i].nic.Dev < candidates[j].nic.Dev
 	})
 	return candidates
 }
 
-func makePair(g gpuInfo, n nicInfo, hops int) checks.GPUNICPair {
-	return checks.GPUNICPair{
-		GPUID:      g.id,
-		GPUName:    g.name,
-		GPUPCIAddr: g.pciAddr,
-		NUMAID:     g.numa,
-		NICDev:     n.dev,
-		NICNuma:    n.numa,
-		NICPCIAddr: n.pciAddr,
-		PCIeHops:   hops,
-	}
+func makePair(g checks.GPUInfo, n checks.NICInfo, hops int) checks.GPUNICPair {
+	return checks.GPUNICPair{GPU: g, NIC: n, PCIeHops: hops}
 }
 
-func groupGPUsByNuma(gpus []gpuInfo) map[int][]gpuInfo {
-	m := make(map[int][]gpuInfo)
+func groupGPUsByNuma(gpus []checks.GPUInfo) map[int][]checks.GPUInfo {
+	m := make(map[int][]checks.GPUInfo)
 	for _, g := range gpus {
-		m[g.numa] = append(m[g.numa], g)
+		m[g.NUMA] = append(m[g.NUMA], g)
 	}
 	return m
 }
 
-func groupNICsByNuma(nics []nicInfo) map[int][]nicInfo {
-	m := make(map[int][]nicInfo)
+func groupNICsByNuma(nics []checks.NICInfo) map[int][]checks.NICInfo {
+	m := make(map[int][]checks.NICInfo)
 	for _, n := range nics {
-		m[n.numa] = append(m[n.numa], n)
+		m[n.NUMA] = append(m[n.NUMA], n)
 	}
 	return m
 }
 
-func sortGPUsByID(gpus []gpuInfo) {
-	sort.Slice(gpus, func(i, j int) bool { return gpus[i].id < gpus[j].id })
+func sortGPUsByID(gpus []checks.GPUInfo) {
+	sort.Slice(gpus, func(i, j int) bool { return gpus[i].ID < gpus[j].ID })
 }
 
-func sortNICsByDev(nics []nicInfo) {
-	sort.Slice(nics, func(i, j int) bool { return nics[i].dev < nics[j].dev })
+func sortNICsByDev(nics []checks.NICInfo) {
+	sort.Slice(nics, func(i, j int) bool { return nics[i].Dev < nics[j].Dev })
 }
 
-func sortedNICsCopy(nics []nicInfo) []nicInfo {
-	cp := make([]nicInfo, len(nics))
+func sortedNICsCopy(nics []checks.NICInfo) []checks.NICInfo {
+	cp := make([]checks.NICInfo, len(nics))
 	copy(cp, nics)
 	sortNICsByDev(cp)
 	return cp

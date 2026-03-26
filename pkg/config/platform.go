@@ -60,17 +60,25 @@ type ResourceConfig struct {
 	RDMA        RDMAJobConfig     `yaml:"rdma,omitempty" json:"rdma,omitempty"`
 }
 
+// RDMAType identifies the RDMA fabric type for NIC filtering.
+type RDMAType string
+
+const (
+	RDMATypeIB   RDMAType = "ib"
+	RDMATypeRoCE RDMAType = "roce"
+)
+
 // RDMAJobConfig holds ib_write_bw test parameters.
 // Zero values mean "use defaults" (QPs=4, MessageSize=1MiB).
 type RDMAJobConfig struct {
-	QPs         int `yaml:"qps,omitempty" json:"qps,omitempty"`
-	MessageSize int `yaml:"message_size,omitempty" json:"message_size,omitempty"`
+	QPs         int `yaml:"qps,omitempty" json:"qps,omitempty"`         // Number of queue pairs
+	MessageSize int `yaml:"message_size,omitempty" json:"message_size,omitempty"` // Message size in bytes
 }
 
 // Validate checks that user-provided config values are well-formed.
 func (c PlatformConfig) Validate() error {
-	if rt := c.Jobs.RDMAType; rt != "" && rt != "ib" && rt != "roce" {
-		return fmt.Errorf("invalid jobs.rdma_type %q: must be \"ib\", \"roce\", or empty", rt)
+	if rt := RDMAType(c.Jobs.RDMAType); rt != "" && rt != RDMATypeIB && rt != RDMATypeRoCE {
+		return fmt.Errorf("invalid jobs.rdma_type %q: must be %q, %q, or empty", c.Jobs.RDMAType, RDMATypeIB, RDMATypeRoCE)
 	}
 	return nil
 }

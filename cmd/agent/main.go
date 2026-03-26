@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/opendatahub-io/rhaii-cluster-validation/pkg/checks"
 	"github.com/opendatahub-io/rhaii-cluster-validation/pkg/checks/gpu"
 	"github.com/opendatahub-io/rhaii-cluster-validation/pkg/checks/networking"
 	"github.com/opendatahub-io/rhaii-cluster-validation/pkg/checks/rdma"
@@ -17,6 +18,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+
+const (
+	CheckModeGPU          = "gpu"
+	CheckModeNetworking   = "networking"
+	CheckModeNetChecks    = "net-checks"
+	CheckModeNetBandwidth = "net-bandwidth"
+	CheckModeAll          = "all"
+)
 
 var (
 	version      = "dev"
@@ -65,7 +74,7 @@ func newGPUCmd() *cobra.Command {
 		Short: "Run GPU hardware checks on all GPU nodes",
 		Long:  `Deploys agents to GPU nodes and validates GPU driver version, ECC status, and GPU health.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.CheckMode = "gpu"
+			opts.CheckMode = CheckModeGPU
 			return runDeploy(opts, func(ctrl *controller.Controller) {
 				// GPU checks only — no multi-node jobs
 			})
@@ -87,7 +96,7 @@ func newNetworkingCmd() *cobra.Command {
 		Long: `Tests TCP and RDMA bandwidth between GPU nodes using ring topology.
 Requires 2+ GPU nodes. Each node is tested as both sender and receiver.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.CheckMode = "networking"
+			opts.CheckMode = CheckModeNetworking
 			return runDeploy(opts, func(ctrl *controller.Controller) {
 				ctrl.AddJob(networking.NewIperfJob(0, nil))
 				ctrl.AddJob(rdma.NewRDMABandwidthJob(0, nil))
@@ -113,7 +122,7 @@ func newNetChecksCmd() *cobra.Command {
 Discovers GPU-NIC-NUMA topology, validates RDMA device presence, and checks NIC link status.
 Results are stored in the report ConfigMap for use by net-bandwidth.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.CheckMode = "net-checks"
+			opts.CheckMode = CheckModeNetChecks
 			return runDeploy(opts, func(ctrl *controller.Controller) {})
 		},
 	}
@@ -133,7 +142,7 @@ func newNetBandwidthCmd() *cobra.Command {
 		Long: `Runs multi-node bandwidth tests using topology from a previous net-checks or networking run.
 Requires 2+ GPU nodes. Uses stored report for GPU-NIC topology mapping.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.CheckMode = "net-bandwidth"
+			opts.CheckMode = CheckModeNetBandwidth
 			return runDeploy(opts, func(ctrl *controller.Controller) {
 				ctrl.AddJob(networking.NewIperfJob(0, nil))
 				ctrl.AddJob(rdma.NewRDMABandwidthJob(0, nil))
@@ -157,7 +166,7 @@ func newAllCmd() *cobra.Command {
 		Short: "Run all checks (gpu + networking)",
 		Long:  `Full cluster validation: GPU hardware checks on all nodes, then network bandwidth tests between nodes.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.CheckMode = "all"
+			opts.CheckMode = CheckModeAll
 			return runDeploy(opts, func(ctrl *controller.Controller) {
 				ctrl.AddJob(networking.NewIperfJob(0, nil))
 				ctrl.AddJob(rdma.NewRDMABandwidthJob(0, nil))
@@ -311,10 +320,10 @@ func newRunCmd() *cobra.Command {
 			vendor := os.Getenv("GPU_VENDOR")
 			checkMode := os.Getenv("CHECK_MODE")
 			if checkMode == "" {
-				checkMode = "all"
+				checkMode = CheckModeAll
 			}
 
-			if checkMode == "gpu" || checkMode == "all" {
+			if checkMode == CheckModeGPU || checkMode == CheckModeAll {
 				switch config.GPUVendor(vendor) {
 				case config.GPUVendorAMD:
 					r.AddCheck(gpu.NewAMDDriverCheck(nodeName, cfg.GPU.MinDriverVersion))
@@ -325,8 +334,8 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
-			if checkMode == "networking" || checkMode == "all" {
-				rdmaMode := os.Getenv("RDMA_MODE")
+			if checkMode == CheckModeNetworking || checkMode == CheckModeAll {
+				rdmaMode := checks.NormalizeRDMAMode(os.Getenv("RDMA_MODE"))
 				r.AddCheck(rdma.NewTopologyCheck(nodeName, rdmaMode))
 				r.AddCheck(rdma.NewDevicesCheck(nodeName))
 				r.AddCheck(rdma.NewStatusCheck(nodeName))

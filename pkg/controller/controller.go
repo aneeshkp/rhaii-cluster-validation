@@ -493,7 +493,8 @@ func (c *Controller) Run(ctx context.Context) error {
 	// Step 8: Run multi-node bandwidth jobs (using topology from networking reports)
 	var jobResults []jobrunner.JobResult
 	needBandwidth := c.opts.CheckMode == "networking" || c.opts.CheckMode == "net-bandwidth" || c.opts.CheckMode == "all"
-	if needBandwidth && len(c.jobs) > 0 && len(gpuNodes) >= 2 {
+	shouldRunBandwidth := needBandwidth && len(c.jobs) > 0 && len(gpuNodes) >= 2
+	if shouldRunBandwidth {
 		// If net checks didn't run this session, load topology from stored report
 		if len(netReports) == 0 {
 			stored, topoErr := c.loadTopologyFromReport(ctx, gpuNodes)
@@ -1406,15 +1407,15 @@ func (c *Controller) expandRDMAJobs(ctx context.Context, gpuNodes []string, topo
 				rdmaJob.PodCfg = origPodCfg
 				rdmaJob.ServerImage = origServerImg
 				rdmaJob.ClientImage = origClientImg
-				rdmaJob.Device = pair.NICDev
-				rdmaJob.UseCUDA = pair.GPUID
+				rdmaJob.Device = pair.NIC.Dev
+				rdmaJob.UseCUDA = pair.GPU.ID
 				jobs = append(jobs, rdmaJob)
-				fmt.Fprintf(c.output, "  RDMA PD job: GPU%d ↔ %s (NUMA%d)\n", pair.GPUID, pair.NICDev, pair.NUMAID)
+				fmt.Fprintf(c.output, "  RDMA PD job: GPU%d ↔ %s (NUMA:%d↔%d)\n", pair.GPU.ID, pair.NIC.Dev, pair.GPU.NUMA, pair.NIC.NUMA)
 
-				if !uniqueDevices[pair.NICDev] {
-					devices = append(devices, pair.NICDev)
-					gpuIDs = append(gpuIDs, pair.GPUID)
-					uniqueDevices[pair.NICDev] = true
+				if !uniqueDevices[pair.NIC.Dev] {
+					devices = append(devices, pair.NIC.Dev)
+					gpuIDs = append(gpuIDs, pair.GPU.ID)
+					uniqueDevices[pair.NIC.Dev] = true
 				}
 			}
 		} else {
@@ -1670,7 +1671,7 @@ func (c *Controller) printReport(reports []checks.NodeReport, jobResults []jobru
 			}
 			var pairDescs []string
 			for _, p := range topo.Pairs {
-				pairDescs = append(pairDescs, fmt.Sprintf("GPU%d↔%s(NUMA%d)", p.GPUID, p.NICDev, p.NUMAID))
+				pairDescs = append(pairDescs, fmt.Sprintf("GPU%d↔%s(NUMA:%d↔%d)", p.GPU.ID, p.NIC.Dev, p.GPU.NUMA, p.NIC.NUMA))
 			}
 			fmt.Fprintf(c.output, "  %s: %s\n", report.Node, strings.Join(pairDescs, ", "))
 		}
