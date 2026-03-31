@@ -5,31 +5,32 @@
 ARG BUILDER_IMAGE=nvcr.io/nvidia/cuda:13.2.0-devel-ubi9
 ARG RUNTIME_IMAGE=nvcr.io/nvidia/cuda:13.2.0-runtime-ubi9
 
-# Tool versions (pinned for reproducibility)
-ARG PERFTEST_VERSION=25.10.0-0.128
+# Perftest release tarball (pre-generated configure, no autotools needed)
+# Source: https://github.com/linux-rdma/perftest/releases/tag/25.10.0-0.128
+ARG PERFTEST_TARBALL=perftest-25.10.0-0.128.gd01b183.tar.gz
 
 # ============================================================================
 # Builder Stage: Build perftest from source (needs CUDA headers)
 # ============================================================================
 FROM ${BUILDER_IMAGE} AS builder
 
-ARG PERFTEST_VERSION
+ARG PERFTEST_TARBALL
 
 # Needed with aipcc image
 USER root
 
-# Install build dependencies
+# Install build dependencies (no autotools needed — release tarball has pre-generated configure)
 RUN dnf install -y \
-    git gcc gcc-c++ make autoconf automake libtool diffutils \
+    gcc gcc-c++ make diffutils \
     pciutils-devel \
     rdma-core-devel libibverbs-devel librdmacm-devel libibumad-devel \
     && dnf clean all
 
 # Build perftest with CUDA support
-RUN git clone --branch ${PERFTEST_VERSION} --depth 1 https://github.com/linux-rdma/perftest.git /tmp/perftest && \
-    cd /tmp/perftest && \
-    ./autogen.sh && \
-    CUDA_H_PATH=/usr/local/cuda/include ./configure --prefix=/usr --enable-cudart && \
+COPY tools/${PERFTEST_TARBALL} /tmp/
+RUN tar xzf /tmp/${PERFTEST_TARBALL} -C /tmp/ && \
+    cd /tmp/perftest-25.10.0 && \
+    ./configure --prefix=/usr --enable-cudart && \
     make -j$(nproc) && \
     make install DESTDIR=/install
 
