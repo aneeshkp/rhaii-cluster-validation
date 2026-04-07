@@ -26,8 +26,8 @@ RUN tar xzf /tmp/${PERFTEST_TARBALL} -C /tmp/ && \
     make -j$(nproc) && \
     make install DESTDIR=/install
 
-# Runtime stage
-FROM registry.redhat.io/rhai/base-image-cuda-13.0-rhel9@sha256:e29b922fee43fd4b2396768b206c280fb91482a9b141ae9dfcfafa09b7462287
+# Runtime stage — vanilla UBI9, libcudart copied from builder
+FROM registry.redhat.io/ubi9/ubi@sha256:30917ae4ab1d099e7624c57a3ad7b682247afb694da373042b6cd649fb164968
 
 LABEL name="rhoai/odh-rhaii-validator-tools-rhel9" \
       com.redhat.component="odh-rhaii-validator-tools-rhel9" \
@@ -40,9 +40,6 @@ LABEL name="rhoai/odh-rhaii-validator-tools-rhel9" \
 # Root required: RDMA perftest (ib_write_bw, ib_read_bw) and GPU bandwidth tools
 # need direct access to InfiniBand/RoCE devices and CUDA runtime.
 USER root
-
-# switch from internal mirrors to public vendor repos
-RUN ${APP_ROOT}/lib/tools/public-repos.sh
 
 WORKDIR /root
 
@@ -58,6 +55,11 @@ RUN dnf install -y libibverbs libibumad librdmacm infiniband-diags && dnf clean 
 
 # Copy perftest binaries from builder
 COPY --from=builder /install/usr/bin/* /usr/local/bin/
+
+# Copy libcudart from builder — the only CUDA library perftest needs at runtime (~756K).
+# The GPU driver library (libcuda.so.1) is mounted by the NVIDIA Container Toolkit.
+COPY --from=builder /usr/local/cuda/lib64/libcudart.so.* /usr/local/lib/
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/cuda.conf && ldconfig
 
 # Create results directory
 RUN mkdir -p /results

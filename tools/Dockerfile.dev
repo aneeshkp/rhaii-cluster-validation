@@ -3,7 +3,7 @@
 #   nvcr.io/nvidia/cuda:13.0.0-devel-ubi9 / nvcr.io/nvidia/cuda:13.0.0-runtime-ubi9
 #   quay.io/aipcc/base-images/cuda-13.0-el9.6:3.4 (includes CUDA devel + runtime)
 ARG BUILDER_IMAGE=nvcr.io/nvidia/cuda:13.2.0-devel-ubi9
-ARG RUNTIME_IMAGE=nvcr.io/nvidia/cuda:13.2.0-runtime-ubi9
+ARG RUNTIME_IMAGE=registry.redhat.io/ubi9/ubi@sha256:30917ae4ab1d099e7624c57a3ad7b682247afb694da373042b6cd649fb164968
 
 # Perftest release tarball (pre-generated configure, no autotools needed)
 # Source: https://github.com/linux-rdma/perftest/releases/tag/25.10.0-0.128
@@ -68,6 +68,11 @@ RUN dnf install -y libibverbs libibumad librdmacm infiniband-diags && dnf clean 
 
 # Copy perftest binaries from builder
 COPY --from=builder /install/usr/bin/* /usr/local/bin/
+
+# Copy libcudart from builder — the only CUDA library perftest needs at runtime (~756K).
+# The GPU driver library (libcuda.so.1) is mounted by the NVIDIA Container Toolkit.
+COPY --from=builder /usr/local/cuda/lib64/libcudart.so.* /usr/local/lib/
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/cuda.conf && ldconfig
 
 # Create results directory
 RUN mkdir -p /results
