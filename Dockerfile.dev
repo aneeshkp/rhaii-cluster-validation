@@ -9,7 +9,11 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 ARG DEFAULT_IMAGE=ghcr.io/opendatahub-io/rhaii-cluster-validation/odh-rhaii-cluster-validator:latest
-RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.defaultImage=${DEFAULT_IMAGE}" -o /opt/app-root/rhaii-validator ./cmd/agent/
+ARG DEFAULT_TOOLS_IMAGE=
+RUN if [ -n "${DEFAULT_TOOLS_IMAGE}" ]; then \
+      sed -i "s|default:.*|default: \"${DEFAULT_TOOLS_IMAGE}\"|" manifests/image-references/jobs.yaml; \
+    fi && \
+    CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.defaultImage=${DEFAULT_IMAGE}" -o /opt/app-root/rhaii-validator ./cmd/agent/
 
 # Runtime stage
 FROM registry.access.redhat.com/ubi9/ubi:latest
