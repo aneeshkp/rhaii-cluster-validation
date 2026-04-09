@@ -20,22 +20,15 @@ RUN dnf install -y \
 
 # Build perftest with CUDA support
 COPY tools/${PERFTEST_TARBALL} /tmp/
-RUN tar xzf /tmp/${PERFTEST_TARBALL} -C /tmp/ && \
-    cd /tmp/perftest-25.10.0 && \
+RUN mkdir /tmp/perftest && \
+    tar xzf /tmp/${PERFTEST_TARBALL} -C /tmp/perftest --strip-components=1 && \
+    cd /tmp/perftest && \
     ./configure --prefix=/usr --enable-cudart && \
     make -j$(nproc) && \
     make install DESTDIR=/install
 
 # Runtime stage — vanilla UBI9, libcudart copied from builder
 FROM registry.redhat.io/ubi9/ubi@sha256:30917ae4ab1d099e7624c57a3ad7b682247afb694da373042b6cd649fb164968
-
-LABEL name="rhoai/odh-rhaii-validator-tools-rhel9" \
-      com.redhat.component="odh-rhaii-validator-tools-rhel9" \
-      summary="RHAII Validator Tools" \
-      description="RDMA and network bandwidth testing tools (iperf3, perftest) with CUDA support for preflight validation of xKS clusters before AI workload deployment" \
-      maintainer="Red Hat LLM-D Team" \
-      io.k8s.display-name="RHAII Validator Tools" \
-      io.k8s.description="RDMA and network bandwidth testing tools (iperf3, perftest) with CUDA support for preflight validation of xKS clusters before AI workload deployment"
 
 # Root required: RDMA perftest (ib_write_bw, ib_read_bw) and GPU bandwidth tools
 # need direct access to InfiniBand/RoCE devices and CUDA runtime.
@@ -65,3 +58,11 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/cuda.conf && ldconfig
 RUN mkdir -p /results
 
 CMD ["/bin/bash"]
+
+LABEL name="rhoai/odh-rhaii-validator-tools-rhel9" \
+      com.redhat.component="odh-rhaii-validator-tools-rhel9" \
+      summary="RHAII Validator Tools" \
+      description="RDMA and network bandwidth testing tools (iperf3, perftest) with CUDA support for preflight validation of xKS clusters before AI workload deployment" \
+      maintainer="Red Hat LLM-D Team" \
+      io.k8s.display-name="RHAII Validator Tools" \
+      io.k8s.description="RDMA and network bandwidth testing tools (iperf3, perftest) with CUDA support for preflight validation of xKS clusters before AI workload deployment"

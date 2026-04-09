@@ -96,8 +96,7 @@ test:
 
 IMG_TOOLS ?= ghcr.io/opendatahub-io/rhaii-cluster-validation/odh-rhaii-validator-tools:latest
 RDMA_BUILDER_IMAGE ?= nvcr.io/nvidia/cuda:13.0.0-devel-ubi9
-RDMA_RUNTIME_IMAGE ?= nvcr.io/nvidia/cuda:13.0.0-runtime-ubi9
-
+RDMA_RUNTIME_IMAGE ?= registry.redhat.io/ubi9/ubi:latest
 container:
 	$(CONTAINER_RUNTIME) build -f Dockerfile.dev --platform $(TARGET_PLATFORM) --build-arg VERSION=$(VERSION) --build-arg DEFAULT_IMAGE=$(IMG) -t $(IMG) .
 

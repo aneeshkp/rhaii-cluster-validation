@@ -1,9 +1,5 @@
-# Base images for builder and runtime stages
-#  tested:
-#   nvcr.io/nvidia/cuda:13.0.0-devel-ubi9 / nvcr.io/nvidia/cuda:13.0.0-runtime-ubi9
-#   quay.io/aipcc/base-images/cuda-13.0-el9.6:3.4 (includes CUDA devel + runtime)
-ARG BUILDER_IMAGE=nvcr.io/nvidia/cuda:13.2.0-devel-ubi9
-ARG RUNTIME_IMAGE=registry.redhat.io/ubi9/ubi@sha256:30917ae4ab1d099e7624c57a3ad7b682247afb694da373042b6cd649fb164968
+ARG BUILDER_IMAGE=nvcr.io/nvidia/cuda:13.0.0-devel-ubi9
+ARG RUNTIME_IMAGE=registry.access.redhat.com/ubi9/ubi:latest
 
 # Perftest release tarball (pre-generated configure, no autotools needed)
 # Source: https://github.com/linux-rdma/perftest/releases/tag/25.10.0-0.128
@@ -16,9 +12,6 @@ FROM ${BUILDER_IMAGE} AS builder
 
 ARG PERFTEST_TARBALL
 
-# Needed with aipcc image
-USER root
-
 # Install build dependencies (no autotools needed — release tarball has pre-generated configure)
 RUN dnf install -y \
     gcc gcc-c++ make diffutils \
@@ -28,8 +21,9 @@ RUN dnf install -y \
 
 # Build perftest with CUDA support
 COPY tools/${PERFTEST_TARBALL} /tmp/
-RUN tar xzf /tmp/${PERFTEST_TARBALL} -C /tmp/ && \
-    cd /tmp/perftest-25.10.0 && \
+RUN mkdir /tmp/perftest && \
+    tar xzf /tmp/${PERFTEST_TARBALL} -C /tmp/perftest --strip-components=1 && \
+    cd /tmp/perftest && \
     ./configure --prefix=/usr --enable-cudart && \
     make -j$(nproc) && \
     make install DESTDIR=/install
@@ -39,16 +33,6 @@ RUN tar xzf /tmp/${PERFTEST_TARBALL} -C /tmp/ && \
 # Final Stage: Compact runtime image
 # ============================================================================
 FROM ${RUNTIME_IMAGE}
-
-LABEL name="rhoai/odh-rhaii-validator-tools-rhel9" \
-      com.redhat.component="odh-rhaii-validator-tools-rhel9" \
-      summary="RHAII Validator Tools" \
-      description="RDMA and network bandwidth testing tools (iperf3, perftest) with CUDA support for preflight validation of xKS clusters before AI workload deployment" \
-      maintainer="Red Hat LLM-D Team" \
-      io.k8s.display-name="RHAII Validator Tools" \
-      io.k8s.description="RDMA and network bandwidth testing tools (iperf3, perftest) with CUDA support for preflight validation of xKS clusters before AI workload deployment" \
-      org.opencontainers.image.description="RDMA and network bandwidth testing tools (iperf3, perftest) with CUDA support for preflight validation of xKS clusters before AI workload deployment" \
-      org.opencontainers.image.source="https://github.com/opendatahub-io/rhaii-cluster-validation"
 
 # Root required: RDMA perftest (ib_write_bw, ib_read_bw) and GPU bandwidth tools
 # need direct access to InfiniBand/RoCE devices and CUDA runtime.
