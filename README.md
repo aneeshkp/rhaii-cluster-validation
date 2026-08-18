@@ -478,3 +478,4 @@ See [docs/platform-config.md](docs/platform-config.md) for per-platform configur
 See [CLAUDE.md](CLAUDE.md) for full developer docs.
 See [docs/dev.md](docs/dev.md) for odh-cli integration guide.
 See [docs/testing.md](docs/testing.md) for building and running the validator locally against a cluster.
+See [charts/rhaii-cluster-validation/README.md](charts/rhaii-cluster-validation/README.md) for running the validator in-cluster via Helm.
